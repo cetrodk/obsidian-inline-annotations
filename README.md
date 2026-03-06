@@ -4,6 +4,8 @@ Add short notes to any text without creating a full page. Select a word or sente
 
 Perfect for TTRPG notes, study material, manuscripts, or anywhere you want hidden context on specific phrases.
 
+https://github.com/user-attachments/assets/c38f869e-3c93-4b8f-a1c9-a2f25313c1a6
+
 ## How it works
 
 Write annotations inline using the `{text::note}` syntax:
