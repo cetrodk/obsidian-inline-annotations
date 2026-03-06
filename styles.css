@@ -1,12 +1,12 @@
 .inline-annotation {
-	color: var(--text-normal);
-	border-bottom: 1px dotted var(--text-faint);
+	color: var(--text-accent);
+	border-bottom: 1px dotted var(--text-accent);
 	cursor: pointer;
-	transition: border-color 150ms ease;
+	transition: opacity 150ms ease;
 }
 
 .inline-annotation:hover {
-	border-bottom-color: var(--text-accent);
+	opacity: 0.8;
 }
 
 .annotation-popup {
