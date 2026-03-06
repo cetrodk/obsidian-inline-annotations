@@ -1,0 +1,9 @@
+{
+	"id": "inline-annotations",
+	"name": "Inline Annotations",
+	"version": "1.0.0",
+	"minAppVersion": "0.15.0",
+	"description": "Add inline annotations to selected text that show in a popup on click.",
+	"author": "mtr",
+	"isDesktopOnly": false
+}

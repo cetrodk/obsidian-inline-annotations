@@ -1,0 +1,38 @@
+.inline-annotation {
+	color: var(--text-normal);
+	border-bottom: 1px dotted var(--text-faint);
+	cursor: pointer;
+	transition: border-color 150ms ease;
+}
+
+.inline-annotation:hover {
+	border-bottom-color: var(--text-accent);
+}
+
+.annotation-popup {
+	position: fixed;
+	z-index: var(--layer-popover);
+	background: color-mix(in srgb, var(--text-normal) 8%, var(--background-primary));
+	border: 1px solid var(--text-faint);
+	border-radius: 8px;
+	padding: 10px 16px;
+	font-size: var(--font-ui-medium);
+	line-height: 1.5;
+	color: var(--text-normal);
+	box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+	max-width: 320px;
+	white-space: pre-wrap;
+	transform: translateX(-50%);
+	animation: annotation-fade-in 100ms ease;
+}
+
+@keyframes annotation-fade-in {
+	from {
+		opacity: 0;
+		transform: translateX(-50%) translateY(4px);
+	}
+	to {
+		opacity: 1;
+		transform: translateX(-50%) translateY(0);
+	}
+}
