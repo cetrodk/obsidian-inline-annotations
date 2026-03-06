@@ -33,8 +33,9 @@ const DEFAULT_SETTINGS: InlineAnnotationSettings = {
 	triggerMode: "click",
 };
 
-// Global reference so event handlers can read current settings
+// Global references so module-level event handlers can access plugin state
 let pluginSettings: InlineAnnotationSettings = DEFAULT_SETTINGS;
+let pluginApp: App;
 
 // ── Reading View Post-Processor ──────────────────────────────────────
 
@@ -105,6 +106,26 @@ function removePopup() {
 	activeHoverTarget = null;
 }
 
+interface ResolvedAnnotation {
+	found: AnnotationMatch;
+	editorView: EditorView;
+}
+
+function resolveAnnotation(anchor: HTMLElement): ResolvedAnnotation | null {
+	const cmEditor = anchor.closest(".cm-editor");
+	if (!cmEditor) return null;
+
+	const editorView = EditorView.findFromDOM(cmEditor as HTMLElement);
+	if (!editorView) return null;
+
+	const pos = editorView.posAtDOM(anchor);
+	const lineObj = editorView.state.doc.lineAt(pos);
+	const found = findAnnotationAt(lineObj.text, lineObj.from, pos);
+	if (!found) return null;
+
+	return { found, editorView };
+}
+
 function showAnnotationPopup(annotation: string, x: number, y: number, anchor?: HTMLElement) {
 	removePopup();
 
@@ -118,11 +139,59 @@ function showAnnotationPopup(annotation: string, x: number, y: number, anchor?: 
 	textarea.rows = Math.min(annotation.split("\n").length, 10);
 	popup.appendChild(textarea);
 
+	if (anchor) {
+		const resolved = resolveAnnotation(anchor);
+		if (resolved) {
+			const { found, editorView } = resolved;
+			const btnRow = document.createElement("div");
+			btnRow.className = "annotation-popup-buttons";
+
+			const editBtn = document.createElement("button");
+			editBtn.className = "annotation-popup-btn";
+			editBtn.textContent = "Edit";
+			editBtn.addEventListener("click", () => {
+				removePopup();
+				new AnnotationModal(
+					pluginApp,
+					(newAnnotation) => {
+						if (newAnnotation) {
+							editorView.dispatch({
+								changes: {
+									from: found.from,
+									to: found.to,
+									insert: `{${found.visibleText}::${newAnnotation}}`,
+								},
+							});
+						}
+					},
+					found.annotation,
+					"Edit annotation"
+				).open();
+			});
+			btnRow.appendChild(editBtn);
+
+			const deleteBtn = document.createElement("button");
+			deleteBtn.className = "annotation-popup-btn annotation-popup-btn-danger";
+			deleteBtn.textContent = "Remove";
+			deleteBtn.addEventListener("click", () => {
+				removePopup();
+				editorView.dispatch({
+					changes: { from: found.from, to: found.to, insert: found.visibleText },
+				});
+			});
+			btnRow.appendChild(deleteBtn);
+
+			popup.appendChild(btnRow);
+		}
+	}
+
 	popup.style.visibility = "hidden";
 	document.body.appendChild(popup);
 
 	requestAnimationFrame(() => {
+		const popupWidth = popup.offsetWidth;
 		const popupHeight = popup.offsetHeight;
+		const pad = 8;
 
 		// Find the line-level rect closest to the mouse/hover point.
 		// getClientRects() returns one rect per line for inline elements,
@@ -141,13 +210,29 @@ function showAnnotationPopup(annotation: string, x: number, y: number, anchor?: 
 			}
 		}
 
+		let top: number;
+		let left: number;
+
 		if (lineRect) {
-			popup.style.top = `${lineRect.top - popupHeight - 2}px`;
-			popup.style.left = `${lineRect.left + lineRect.width / 2}px`;
+			top = lineRect.top - popupHeight - 2;
+			left = lineRect.left + lineRect.width / 2;
 		} else {
-			popup.style.top = `${y - popupHeight - 2}px`;
-			popup.style.left = `${x}px`;
+			top = y - popupHeight - 2;
+			left = x;
 		}
+
+		// The popup uses translateX(-50%) to center, so its real
+		// edges are left ± popupWidth/2. Clamp to viewport.
+		const halfW = popupWidth / 2;
+		left = Math.max(halfW + pad, Math.min(left, window.innerWidth - halfW - pad));
+
+		// If clipped above, flip below the anchor instead
+		if (top < pad) {
+			top = lineRect ? lineRect.bottom + 2 : y + 2;
+		}
+
+		popup.style.top = `${top}px`;
+		popup.style.left = `${left}px`;
 		popup.style.visibility = "";
 	});
 
@@ -635,6 +720,7 @@ export default class InlineAnnotationsPlugin extends Plugin {
 			await this.loadData()
 		);
 		pluginSettings = this.settings;
+		pluginApp = this.app;
 	}
 
 	async saveSettings() {
