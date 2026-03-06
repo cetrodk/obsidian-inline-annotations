@@ -8,7 +8,6 @@ import {
 	Plugin,
 	PluginSettingTab,
 	Setting,
-	TextComponent,
 } from "obsidian";
 import {
 	Decoration,
@@ -22,7 +21,7 @@ import {
 import { RangeSetBuilder } from "@codemirror/state";
 
 // Syntax: {visible text::annotation}
-const ANNOTATION_REGEX = /\{([^}]*?)\:\:([^}]+)\}/g;
+const ANNOTATION_REGEX = /\{([^}]*?)::([^}]+)\}/g;
 
 type TriggerMode = "click" | "hover";
 
@@ -111,7 +110,13 @@ function showAnnotationPopup(annotation: string, x: number, y: number, anchor?: 
 
 	const popup = document.createElement("div");
 	popup.className = "annotation-popup";
-	popup.textContent = annotation;
+
+	const textarea = document.createElement("textarea");
+	textarea.className = "annotation-popup-textarea";
+	textarea.value = annotation;
+	textarea.readOnly = true;
+	textarea.rows = Math.min(annotation.split("\n").length, 10);
+	popup.appendChild(textarea);
 
 	popup.style.visibility = "hidden";
 	document.body.appendChild(popup);
@@ -259,10 +264,9 @@ const annotationViewPlugin = ViewPlugin.fromClass(AnnotationViewPlugin, {
 // ── Prompt Modal ─────────────────────────────────────────────────────
 
 class AnnotationModal extends Modal {
-	result: string = "";
-	onSubmit: (result: string) => void;
-	initialValue: string;
-	title: string;
+	private onSubmit: (result: string) => void;
+	private initialValue: string;
+	private title: string;
 
 	constructor(
 		app: App,
@@ -280,29 +284,66 @@ class AnnotationModal extends Modal {
 		const { contentEl } = this;
 		contentEl.createEl("h3", { text: this.title });
 
-		const input = new TextComponent(contentEl);
-		input.setPlaceholder("e.g. DC15 - you struggle");
-		input.setValue(this.initialValue);
-		input.inputEl.style.width = "100%";
-		input.inputEl.addEventListener("keydown", (e) => {
-			if (e.key === "Enter") {
+		const textarea = contentEl.createEl("textarea", {
+			cls: "annotation-modal-textarea",
+			placeholder: "e.g. DC15 - you struggle",
+		});
+		textarea.value = this.initialValue;
+		textarea.rows = 5;
+
+		const submit = () => {
+			const value = textarea.value;
+			this.close();
+			setTimeout(() => this.onSubmit(value), 50);
+		};
+
+		textarea.addEventListener("keydown", (e) => {
+			if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
 				e.preventDefault();
 				e.stopPropagation();
-				const value = input.getValue();
-				this.close();
-				setTimeout(() => this.onSubmit(value), 50);
+				submit();
 			}
 		});
 
+		const buttonRow = contentEl.createDiv({ cls: "annotation-modal-buttons" });
+		buttonRow.createEl("button", { text: "Save", cls: "mod-cta" })
+			.addEventListener("click", submit);
+		buttonRow.createEl("small", {
+			text: "or press Ctrl+Enter",
+			cls: "annotation-modal-hint",
+		});
+
 		setTimeout(() => {
-			input.inputEl.focus();
-			input.inputEl.select();
+			textarea.focus();
+			textarea.select();
 		}, 50);
 	}
 
 	onClose() {
 		this.contentEl.empty();
 	}
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────
+
+interface AnnotationMatch {
+	visibleText: string;
+	annotation: string;
+	from: number;
+	to: number;
+}
+
+function findAnnotationAt(lineText: string, lineFrom: number, pos: number): AnnotationMatch | null {
+	ANNOTATION_REGEX.lastIndex = 0;
+	let match;
+	while ((match = ANNOTATION_REGEX.exec(lineText)) !== null) {
+		const from = lineFrom + match.index;
+		const to = from + match[0].length;
+		if (pos >= from && pos <= to) {
+			return { visibleText: match[1], annotation: match[2], from, to };
+		}
+	}
+	return null;
 }
 
 // ── Settings Tab ─────────────────────────────────────────────────────
@@ -413,6 +454,12 @@ export default class InlineAnnotationsPlugin extends Plugin {
 			document.removeEventListener("mouseout", onMouseOut, true);
 		});
 
+		// Clean up popup when switching notes
+		this.registerEvent(
+			this.app.workspace.on("active-leaf-change", removePopup)
+		);
+		this.register(removePopup);
+
 		// ── Right-click on annotation widget (capture phase) ─────
 		const onContextMenu = (e: MouseEvent) => {
 			const target = (e.target as HTMLElement)?.closest(
@@ -420,7 +467,6 @@ export default class InlineAnnotationsPlugin extends Plugin {
 			) as HTMLElement | null;
 			if (!target) return;
 
-			// Only handle widgets inside an editor (cm-editor)
 			const cmEditor = target.closest(".cm-editor");
 			if (!cmEditor) return;
 
@@ -428,65 +474,51 @@ export default class InlineAnnotationsPlugin extends Plugin {
 			e.stopPropagation();
 			e.stopImmediatePropagation();
 
-			// Find the EditorView and document position
 			const editorView = EditorView.findFromDOM(cmEditor as HTMLElement);
 			if (!editorView) return;
 
 			const pos = editorView.posAtDOM(target);
-			const doc = editorView.state.doc;
-			const lineObj = doc.lineAt(pos);
-			const lineText = lineObj.text;
+			const lineObj = editorView.state.doc.lineAt(pos);
+			const found = findAnnotationAt(lineObj.text, lineObj.from, pos);
+			if (!found) return;
 
-			ANNOTATION_REGEX.lastIndex = 0;
-			let match;
-			while ((match = ANNOTATION_REGEX.exec(lineText)) !== null) {
-				const matchFrom = lineObj.from + match.index;
-				const matchTo = matchFrom + match[0].length;
-				if (pos >= matchFrom && pos <= matchTo) {
-					const visibleText = match[1];
-					const currentAnnotation = match[2];
-
-					const menu = new Menu();
-					menu.addItem((item) => {
-						item.setTitle("Edit annotation")
-							.setIcon("pencil")
-							.onClick(() => {
-								new AnnotationModal(
-									this.app,
-									(newAnnotation) => {
-										if (newAnnotation) {
-											const change = {
-												from: matchFrom,
-												to: matchTo,
-												insert: `{${visibleText}::${newAnnotation}}`,
-											};
-											editorView.dispatch({
-												changes: change,
-											});
-										}
-									},
-									currentAnnotation,
-									"Edit annotation"
-								).open();
-							});
+			const menu = new Menu();
+			menu.addItem((item) => {
+				item.setTitle("Edit annotation")
+					.setIcon("pencil")
+					.onClick(() => {
+						new AnnotationModal(
+							this.app,
+							(newAnnotation) => {
+								if (newAnnotation) {
+									editorView.dispatch({
+										changes: {
+											from: found.from,
+											to: found.to,
+											insert: `{${found.visibleText}::${newAnnotation}}`,
+										},
+									});
+								}
+							},
+							found.annotation,
+							"Edit annotation"
+						).open();
 					});
-					menu.addItem((item) => {
-						item.setTitle("Remove annotation")
-							.setIcon("x-circle")
-							.onClick(() => {
-								editorView.dispatch({
-									changes: {
-										from: matchFrom,
-										to: matchTo,
-										insert: visibleText,
-									},
-								});
-							});
+			});
+			menu.addItem((item) => {
+				item.setTitle("Remove annotation")
+					.setIcon("x-circle")
+					.onClick(() => {
+						editorView.dispatch({
+							changes: {
+								from: found.from,
+								to: found.to,
+								insert: found.visibleText,
+							},
+						});
 					});
-					menu.showAtMouseEvent(e);
-					break;
-				}
-			}
+			});
+			menu.showAtMouseEvent(e);
 		};
 		document.addEventListener("contextmenu", onContextMenu, true);
 		this.register(() =>
@@ -518,21 +550,14 @@ export default class InlineAnnotationsPlugin extends Plugin {
 			editorCallback: (editor: Editor) => {
 				const cursor = editor.getCursor();
 				const line = editor.getLine(cursor.line);
+				const found = findAnnotationAt(line, 0, cursor.ch);
+				if (!found) return;
 
-				ANNOTATION_REGEX.lastIndex = 0;
-				let match;
-				while ((match = ANNOTATION_REGEX.exec(line)) !== null) {
-					const start = match.index;
-					const end = start + match[0].length;
-					if (cursor.ch >= start && cursor.ch <= end) {
-						editor.replaceRange(
-							match[1],
-							{ line: cursor.line, ch: start },
-							{ line: cursor.line, ch: end }
-						);
-						return;
-					}
-				}
+				editor.replaceRange(
+					found.visibleText,
+					{ line: cursor.line, ch: found.from },
+					{ line: cursor.line, ch: found.to }
+				);
 			},
 		});
 
@@ -563,64 +588,41 @@ export default class InlineAnnotationsPlugin extends Plugin {
 
 					const cursor = editor.getCursor();
 					const line = editor.getLine(cursor.line);
-					ANNOTATION_REGEX.lastIndex = 0;
-					let match;
-					while ((match = ANNOTATION_REGEX.exec(line)) !== null) {
-						const start = match.index;
-						const end = start + match[0].length;
-						if (cursor.ch >= start && cursor.ch <= end) {
-							const visibleText = match[1];
-							const currentAnnotation = match[2];
-							const matchStart = start;
-							const matchEnd = end;
+					const found = findAnnotationAt(line, 0, cursor.ch);
+					if (!found) return;
 
-							menu.addItem((item) => {
-								item.setTitle("Edit annotation")
-									.setIcon("pencil")
-									.onClick(() => {
-										new AnnotationModal(
-											this.app,
-											(newAnnotation) => {
-												if (newAnnotation) {
-													editor.replaceRange(
-														`{${visibleText}::${newAnnotation}}`,
-														{
-															line: cursor.line,
-															ch: matchStart,
-														},
-														{
-															line: cursor.line,
-															ch: matchEnd,
-														}
-													);
-												}
-											},
-											currentAnnotation,
-											"Edit annotation"
-										).open();
-									});
+					menu.addItem((item) => {
+						item.setTitle("Edit annotation")
+							.setIcon("pencil")
+							.onClick(() => {
+								new AnnotationModal(
+									this.app,
+									(newAnnotation) => {
+										if (newAnnotation) {
+											editor.replaceRange(
+												`{${found.visibleText}::${newAnnotation}}`,
+												{ line: cursor.line, ch: found.from },
+												{ line: cursor.line, ch: found.to }
+											);
+										}
+									},
+									found.annotation,
+									"Edit annotation"
+								).open();
 							});
+					});
 
-							menu.addItem((item) => {
-								item.setTitle("Remove annotation")
-									.setIcon("x-circle")
-									.onClick(() => {
-										editor.replaceRange(
-											visibleText,
-											{
-												line: cursor.line,
-												ch: matchStart,
-											},
-											{
-												line: cursor.line,
-												ch: matchEnd,
-											}
-										);
-									});
+					menu.addItem((item) => {
+						item.setTitle("Remove annotation")
+							.setIcon("x-circle")
+							.onClick(() => {
+								editor.replaceRange(
+									found.visibleText,
+									{ line: cursor.line, ch: found.from },
+									{ line: cursor.line, ch: found.to }
+								);
 							});
-							break;
-						}
-					}
+					});
 				}
 			)
 		);
