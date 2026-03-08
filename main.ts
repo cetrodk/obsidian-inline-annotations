@@ -63,7 +63,7 @@ function processAnnotations(
 		let lastIndex = 0;
 
 		for (const match of matches) {
-			const matchStart = match.index!;
+			const matchStart = match.index ?? 0;
 			const visibleText = match[1];
 			const annotation = match[2];
 
@@ -185,7 +185,7 @@ function showAnnotationPopup(annotation: string, x: number, y: number, anchor?: 
 		}
 	}
 
-	popup.style.visibility = "hidden";
+	popup.addClass("is-hidden");
 	document.body.appendChild(popup);
 
 	requestAnimationFrame(() => {
@@ -231,9 +231,8 @@ function showAnnotationPopup(annotation: string, x: number, y: number, anchor?: 
 			top = lineRect ? lineRect.bottom + 2 : y + 2;
 		}
 
-		popup.style.top = `${top}px`;
-		popup.style.left = `${left}px`;
-		popup.style.visibility = "";
+		popup.setCssProps({ "--popup-top": `${top}px`, "--popup-left": `${left}px` });
+		popup.removeClass("is-hidden");
 	});
 
 	activePopup = popup;
@@ -461,6 +460,12 @@ class InlineAnnotationSettingTab extends PluginSettingTab {
 	}
 }
 
+function getAnnotationTarget(e: Event): HTMLElement | null {
+	const el = e.target;
+	if (!(el instanceof HTMLElement)) return null;
+	return el.closest<HTMLElement>(".inline-annotation");
+}
+
 // ── Main Plugin ──────────────────────────────────────────────────────
 
 export default class InlineAnnotationsPlugin extends Plugin {
@@ -477,9 +482,7 @@ export default class InlineAnnotationsPlugin extends Plugin {
 		const onClick = (e: MouseEvent) => {
 			if (pluginSettings.triggerMode !== "click") return;
 
-			const target = (e.target as HTMLElement)?.closest(
-				".inline-annotation"
-			) as HTMLElement | null;
+			const target = getAnnotationTarget(e);
 			if (!target) return;
 
 			const annotation = target.getAttribute("data-annotation");
@@ -499,9 +502,7 @@ export default class InlineAnnotationsPlugin extends Plugin {
 		const onMouseOver = (e: MouseEvent) => {
 			if (pluginSettings.triggerMode !== "hover") return;
 
-			const target = (e.target as HTMLElement)?.closest(
-				".inline-annotation"
-			) as HTMLElement | null;
+			const target = getAnnotationTarget(e);
 			if (!target || target === activeHoverTarget) return;
 
 			const annotation = target.getAttribute("data-annotation");
@@ -524,9 +525,7 @@ export default class InlineAnnotationsPlugin extends Plugin {
 		const onMouseOut = (e: MouseEvent) => {
 			if (pluginSettings.triggerMode !== "hover") return;
 
-			const target = (e.target as HTMLElement)?.closest(
-				".inline-annotation"
-			) as HTMLElement | null;
+			const target = getAnnotationTarget(e);
 			if (!target) return;
 
 			hoverTimeout = setTimeout(removePopup, 150);
@@ -547,9 +546,7 @@ export default class InlineAnnotationsPlugin extends Plugin {
 
 		// ── Right-click on annotation widget (capture phase) ─────
 		const onContextMenu = (e: MouseEvent) => {
-			const target = (e.target as HTMLElement)?.closest(
-				".inline-annotation"
-			) as HTMLElement | null;
+			const target = getAnnotationTarget(e);
 			if (!target) return;
 
 			const cmEditor = target.closest(".cm-editor");

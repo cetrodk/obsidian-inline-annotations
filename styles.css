@@ -11,6 +11,8 @@
 
 .annotation-popup {
 	position: fixed;
+	top: var(--popup-top);
+	left: var(--popup-left);
 	z-index: var(--layer-popover);
 	background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary));
 	border: 1px solid var(--interactive-accent);
@@ -23,6 +25,10 @@
 	max-width: 320px;
 	transform: translateX(-50%);
 	animation: annotation-fade-in 100ms ease;
+}
+
+.annotation-popup.is-hidden {
+	visibility: hidden;
 }
 
 .annotation-popup-textarea {
