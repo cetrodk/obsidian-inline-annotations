@@ -5,6 +5,7 @@ import {
 	MarkdownView,
 	Menu,
 	Modal,
+	Notice,
 	Plugin,
 	PluginSettingTab,
 	Setting,
@@ -18,10 +19,42 @@ import {
 	ViewUpdate,
 	WidgetType,
 } from "@codemirror/view";
-import { RangeSetBuilder } from "@codemirror/state";
+import { EditorState, RangeSetBuilder } from "@codemirror/state";
+import { syntaxTree } from "@codemirror/language";
 
 // Syntax: {visible text::annotation}
-const ANNOTATION_REGEX = /\{([^}]*?)::([^}]+)\}/g;
+//
+// Neither group may contain a newline. Without that restriction a stray "{"
+// far above a "::" swallows everything in between -- which is how a Java or
+// C++ code block ends up rendered as one giant annotation, and how a
+// line-spanning replace decoration corrupts the CodeMirror document.
+const ANNOTATION_PATTERN = "\\{([^}\\n]*?)::([^}\\n]+)\\}";
+
+// A fresh regex per scan: a shared /g regex carries lastIndex between callers.
+function annotationRegex(): RegExp {
+	return new RegExp(ANNOTATION_PATTERN, "g");
+}
+
+// Contexts where "{a::b}" is code or markup, not an annotation.
+const EXCLUDED_SELECTOR = "code, pre, .math, mjx-container";
+const EXCLUDED_NODE_NAMES = ["code", "math", "frontmatter"];
+
+// Walks up the syntax tree at pos looking for a code/math/frontmatter node.
+function isExcludedContext(state: EditorState, pos: number): boolean {
+	let node = syntaxTree(state).resolveInner(pos, 1);
+	for (;;) {
+		const name = node.name.toLowerCase();
+		if (EXCLUDED_NODE_NAMES.some((n) => name.includes(n))) return true;
+		const parent = node.parent;
+		if (!parent) return false;
+		node = parent;
+	}
+}
+
+// Annotations live on one line, so a selection spanning lines can't become one.
+function flattenAnnotation(text: string): string {
+	return text.replace(/\s*\n\s*/g, " ").trim();
+}
 
 type TriggerMode = "click" | "hover";
 
@@ -55,8 +88,10 @@ function processAnnotations(
 		const text = textNode.textContent;
 		if (!text) continue;
 
-		ANNOTATION_REGEX.lastIndex = 0;
-		const matches = [...text.matchAll(ANNOTATION_REGEX)];
+		// "std::vector" inside a code block is not an annotation.
+		if (textNode.parentElement?.closest(EXCLUDED_SELECTOR)) continue;
+
+		const matches = [...text.matchAll(annotationRegex())];
 		if (matches.length === 0) continue;
 
 		const fragment = document.createDocumentFragment();
@@ -308,22 +343,30 @@ class AnnotationViewPlugin implements PluginValue {
 
 	buildDecorations(view: EditorView): DecorationSet {
 		const builder = new RangeSetBuilder<Decoration>();
-		const doc = view.state.doc;
+		const { doc } = view.state;
+		// Ranges must reach the builder in ascending order. A visible range can
+		// start mid-line, so a line is scanned from its true start and may
+		// overlap what the previous range already covered.
+		let lastEnd = -1;
 
 		for (const { from, to } of view.visibleRanges) {
-			const text = doc.sliceString(from, to);
-			ANNOTATION_REGEX.lastIndex = 0;
-			let match;
+			for (let pos = from; pos <= to; ) {
+				const line = doc.lineAt(pos);
+				const regex = annotationRegex();
+				let match;
 
-			while ((match = ANNOTATION_REGEX.exec(text)) !== null) {
-				const start = from + match.index;
-				const end = start + match[0].length;
+				while ((match = regex.exec(line.text)) !== null) {
+					const start = line.from + match.index;
+					const end = start + match[0].length;
 
-				const cursorInside = view.state.selection.ranges.some(
-					(r) => r.from >= start && r.to <= end
-				);
+					if (start < lastEnd) continue;
+					if (isExcludedContext(view.state, start)) continue;
 
-				if (!cursorInside) {
+					const cursorInside = view.state.selection.ranges.some(
+						(r) => r.from >= start && r.to <= end
+					);
+					if (cursorInside) continue;
+
 					builder.add(
 						start,
 						end,
@@ -331,7 +374,10 @@ class AnnotationViewPlugin implements PluginValue {
 							widget: new AnnotationWidget(match[1], match[2]),
 						})
 					);
+					lastEnd = end;
 				}
+
+				pos = line.to + 1;
 			}
 		}
 
@@ -376,7 +422,8 @@ class AnnotationModal extends Modal {
 		textarea.rows = 5;
 
 		const submit = () => {
-			const value = textarea.value;
+			// An annotation must stay on one line, so newlines become spaces.
+			const value = flattenAnnotation(textarea.value);
 			this.close();
 			setTimeout(() => this.onSubmit(value), 50);
 		};
@@ -417,10 +464,22 @@ interface AnnotationMatch {
 	to: number;
 }
 
+// An annotation wraps its visible text on a single line. Annotating a
+// selection that spans lines would produce a "{...::...}" straddling a line
+// break -- unparseable, and in Live Preview a replace decoration across a
+// line break corrupts the document.
+function canAnnotateSelection(selection: string, notify = true): boolean {
+	if (!selection.includes("\n")) return true;
+	if (notify) {
+		new Notice("Annotations cannot span multiple lines.");
+	}
+	return false;
+}
+
 function findAnnotationAt(lineText: string, lineFrom: number, pos: number): AnnotationMatch | null {
-	ANNOTATION_REGEX.lastIndex = 0;
+	const regex = annotationRegex();
 	let match;
-	while ((match = ANNOTATION_REGEX.exec(lineText)) !== null) {
+	while ((match = regex.exec(lineText)) !== null) {
 		const from = lineFrom + match.index;
 		const to = from + match[0].length;
 		if (pos >= from && pos <= to) {
@@ -614,6 +673,7 @@ export default class InlineAnnotationsPlugin extends Plugin {
 			editorCallback: (editor: Editor, view: MarkdownView) => {
 				const selection = editor.getSelection();
 				if (!selection) return;
+				if (!canAnnotateSelection(selection)) return;
 
 				new AnnotationModal(this.app, (annotation) => {
 					if (annotation) {
@@ -649,7 +709,7 @@ export default class InlineAnnotationsPlugin extends Plugin {
 				"editor-menu",
 				(menu: Menu, editor: Editor, view: MarkdownView) => {
 					const selection = editor.getSelection();
-					if (selection) {
+					if (selection && canAnnotateSelection(selection, false)) {
 						menu.addItem((item) => {
 							item.setTitle("Annotate selection")
 								.setIcon("message-square")
