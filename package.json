@@ -1,6 +1,6 @@
 {
 	"name": "inline-annotations",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"description": "Inline annotations for Obsidian",
 	"main": "main.js",
 	"scripts": {
@@ -11,6 +11,7 @@
 	"author": "Morten Trøjborg",
 	"license": "MIT",
 	"devDependencies": {
+		"@codemirror/language": "^6.12.4",
 		"@types/node": "^16.11.6",
 		"builtin-modules": "^3.3.0",
 		"esbuild": "0.17.3",

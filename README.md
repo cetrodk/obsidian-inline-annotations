@@ -16,6 +16,8 @@ The party finds a {locked chest::DC 15 — on failure, the mechanism jams}.
 
 In reading view and live preview, only **locked chest** is visible. Click (or hover) to see the note in a popup above the text.
 
+Both the visible text and the note stay on a single line, and `{a::b}` inside code blocks, inline code, math, or frontmatter is left alone — so `std::vector` in a snippet is never mistaken for an annotation.
+
 ## Usage
 
 ### Create an annotation
