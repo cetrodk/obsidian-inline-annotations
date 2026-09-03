@@ -1,14 +1,13 @@
 import {
 	App,
 	Editor,
-	MarkdownPostProcessorContext,
-	MarkdownView,
 	Menu,
 	Modal,
 	Notice,
 	Plugin,
 	PluginSettingTab,
 	Setting,
+	SettingDefinitionItem,
 } from "obsidian";
 import {
 	Decoration,
@@ -72,11 +71,8 @@ let pluginApp: App;
 
 // ── Reading View Post-Processor ──────────────────────────────────────
 
-function processAnnotations(
-	el: HTMLElement,
-	ctx: MarkdownPostProcessorContext
-) {
-	const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+function processAnnotations(el: HTMLElement) {
+	const walker = el.doc.createTreeWalker(el, NodeFilter.SHOW_TEXT);
 	const textNodes: Text[] = [];
 
 	let node;
@@ -91,36 +87,32 @@ function processAnnotations(
 		// "std::vector" inside a code block is not an annotation.
 		if (textNode.parentElement?.closest(EXCLUDED_SELECTOR)) continue;
 
-		const matches = [...text.matchAll(annotationRegex())];
-		if (matches.length === 0) continue;
-
-		const fragment = document.createDocumentFragment();
+		const regex = annotationRegex();
+		const fragment = createFragment();
 		let lastIndex = 0;
+		let match: RegExpExecArray | null;
 
-		for (const match of matches) {
-			const matchStart = match.index ?? 0;
-			const visibleText = match[1];
-			const annotation = match[2];
+		while ((match = regex.exec(text)) !== null) {
+			const matchStart = match.index;
 
 			if (matchStart > lastIndex) {
-				fragment.appendChild(
-					document.createTextNode(text.slice(lastIndex, matchStart))
-				);
+				fragment.appendText(text.slice(lastIndex, matchStart));
 			}
 
-			const span = document.createElement("span");
-			span.className = "inline-annotation";
-			span.textContent = visibleText;
-			span.setAttribute("data-annotation", annotation);
-			fragment.appendChild(span);
+			fragment.createSpan({
+				cls: "inline-annotation",
+				text: match[1],
+				attr: { "data-annotation": match[2] },
+			});
 
 			lastIndex = matchStart + match[0].length;
 		}
 
+		// No annotation on this text node: leave it untouched.
+		if (lastIndex === 0) continue;
+
 		if (lastIndex < text.length) {
-			fragment.appendChild(
-				document.createTextNode(text.slice(lastIndex))
-			);
+			fragment.appendText(text.slice(lastIndex));
 		}
 
 		textNode.replaceWith(fragment);
@@ -131,7 +123,7 @@ function processAnnotations(
 
 let activePopup: HTMLElement | null = null;
 let activeHoverTarget: HTMLElement | null = null;
-let hoverTimeout: ReturnType<typeof setTimeout> | null = null;
+let hoverTimeout: number | null = null;
 
 function removePopup() {
 	if (activePopup) {
@@ -164,26 +156,25 @@ function resolveAnnotation(anchor: HTMLElement): ResolvedAnnotation | null {
 function showAnnotationPopup(annotation: string, x: number, y: number, anchor?: HTMLElement) {
 	removePopup();
 
-	const popup = document.createElement("div");
-	popup.className = "annotation-popup";
+	const popup = createDiv({ cls: "annotation-popup" });
 
-	const textarea = document.createElement("textarea");
-	textarea.className = "annotation-popup-textarea";
+	const textarea = popup.createEl("textarea", {
+		cls: "annotation-popup-textarea",
+	});
 	textarea.value = annotation;
 	textarea.readOnly = true;
 	textarea.rows = Math.min(annotation.split("\n").length, 10);
-	popup.appendChild(textarea);
 
 	if (anchor) {
 		const resolved = resolveAnnotation(anchor);
 		if (resolved) {
 			const { found, editorView } = resolved;
-			const btnRow = document.createElement("div");
-			btnRow.className = "annotation-popup-buttons";
+			const btnRow = popup.createDiv({ cls: "annotation-popup-buttons" });
 
-			const editBtn = document.createElement("button");
-			editBtn.className = "annotation-popup-btn";
-			editBtn.textContent = "Edit";
+			const editBtn = btnRow.createEl("button", {
+				cls: "annotation-popup-btn",
+				text: "Edit",
+			});
 			editBtn.addEventListener("click", () => {
 				removePopup();
 				new AnnotationModal(
@@ -203,27 +194,24 @@ function showAnnotationPopup(annotation: string, x: number, y: number, anchor?: 
 					"Edit annotation"
 				).open();
 			});
-			btnRow.appendChild(editBtn);
 
-			const deleteBtn = document.createElement("button");
-			deleteBtn.className = "annotation-popup-btn annotation-popup-btn-danger";
-			deleteBtn.textContent = "Remove";
+			const deleteBtn = btnRow.createEl("button", {
+				cls: "annotation-popup-btn annotation-popup-btn-danger",
+				text: "Remove",
+			});
 			deleteBtn.addEventListener("click", () => {
 				removePopup();
 				editorView.dispatch({
 					changes: { from: found.from, to: found.to, insert: found.visibleText },
 				});
 			});
-			btnRow.appendChild(deleteBtn);
-
-			popup.appendChild(btnRow);
 		}
 	}
 
 	popup.addClass("is-hidden");
 	document.body.appendChild(popup);
 
-	requestAnimationFrame(() => {
+	window.requestAnimationFrame(() => {
 		const popupWidth = popup.offsetWidth;
 		const popupHeight = popup.offsetHeight;
 		const pad = 8;
@@ -280,7 +268,7 @@ function showAnnotationPopup(annotation: string, x: number, y: number, anchor?: 
 				document.removeEventListener("click", close, true);
 			}
 		};
-		setTimeout(() => {
+		window.setTimeout(() => {
 			document.addEventListener("click", close, true);
 		}, 10);
 	}
@@ -288,12 +276,12 @@ function showAnnotationPopup(annotation: string, x: number, y: number, anchor?: 
 	if (pluginSettings.triggerMode === "hover") {
 		popup.addEventListener("mouseenter", () => {
 			if (hoverTimeout) {
-				clearTimeout(hoverTimeout);
+				window.clearTimeout(hoverTimeout);
 				hoverTimeout = null;
 			}
 		});
 		popup.addEventListener("mouseleave", () => {
-			hoverTimeout = setTimeout(removePopup, 150);
+			hoverTimeout = window.setTimeout(removePopup, 150);
 		});
 	}
 }
@@ -309,11 +297,11 @@ class AnnotationWidget extends WidgetType {
 	}
 
 	toDOM(): HTMLElement {
-		const span = document.createElement("span");
-		span.className = "inline-annotation";
-		span.textContent = this.visibleText;
-		span.setAttribute("data-annotation", this.annotation);
-		return span;
+		return createSpan({
+			cls: "inline-annotation",
+			text: this.visibleText,
+			attr: { "data-annotation": this.annotation },
+		});
 	}
 
 	eq(other: AnnotationWidget) {
@@ -425,7 +413,7 @@ class AnnotationModal extends Modal {
 			// An annotation must stay on one line, so newlines become spaces.
 			const value = flattenAnnotation(textarea.value);
 			this.close();
-			setTimeout(() => this.onSubmit(value), 50);
+			window.setTimeout(() => this.onSubmit(value), 50);
 		};
 
 		textarea.addEventListener("keydown", (e) => {
@@ -444,7 +432,7 @@ class AnnotationModal extends Modal {
 			cls: "annotation-modal-hint",
 		});
 
-		setTimeout(() => {
+		window.setTimeout(() => {
 			textarea.focus();
 			textarea.select();
 		}, 50);
@@ -497,6 +485,23 @@ class InlineAnnotationSettingTab extends PluginSettingTab {
 	constructor(app: App, plugin: InlineAnnotationsPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
+	}
+
+	// Obsidian 1.13+ renders these itself and indexes them for settings
+	// search; display() below is only reached on older versions.
+	getSettingDefinitions(): SettingDefinitionItem[] {
+		return [
+			{
+				name: "Trigger mode",
+				desc: "How to reveal annotation popups",
+				control: {
+					type: "dropdown",
+					key: "triggerMode",
+					defaultValue: DEFAULT_SETTINGS.triggerMode,
+					options: { click: "Click", hover: "Hover" },
+				},
+			},
+		];
 	}
 
 	display(): void {
@@ -568,7 +573,7 @@ export default class InlineAnnotationsPlugin extends Plugin {
 			if (!annotation) return;
 
 			if (hoverTimeout) {
-				clearTimeout(hoverTimeout);
+				window.clearTimeout(hoverTimeout);
 				hoverTimeout = null;
 			}
 
@@ -587,7 +592,7 @@ export default class InlineAnnotationsPlugin extends Plugin {
 			const target = getAnnotationTarget(e);
 			if (!target) return;
 
-			hoverTimeout = setTimeout(removePopup, 150);
+			hoverTimeout = window.setTimeout(removePopup, 150);
 		};
 
 		document.addEventListener("mouseover", onMouseOver, true);
@@ -670,7 +675,7 @@ export default class InlineAnnotationsPlugin extends Plugin {
 		this.addCommand({
 			id: "annotate-selection",
 			name: "Annotate selection",
-			editorCallback: (editor: Editor, view: MarkdownView) => {
+			editorCallback: (editor: Editor) => {
 				const selection = editor.getSelection();
 				if (!selection) return;
 				if (!canAnnotateSelection(selection)) return;
@@ -707,7 +712,7 @@ export default class InlineAnnotationsPlugin extends Plugin {
 		this.registerEvent(
 			this.app.workspace.on(
 				"editor-menu",
-				(menu: Menu, editor: Editor, view: MarkdownView) => {
+				(menu: Menu, editor: Editor) => {
 					const selection = editor.getSelection();
 					if (selection && canAnnotateSelection(selection, false)) {
 						menu.addItem((item) => {
@@ -771,11 +776,10 @@ export default class InlineAnnotationsPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign(
-			{},
-			DEFAULT_SETTINGS,
-			await this.loadData()
-		);
+		const saved = (await this.loadData()) as
+			| Partial<InlineAnnotationSettings>
+			| null;
+		this.settings = { ...DEFAULT_SETTINGS, ...saved };
 		pluginSettings = this.settings;
 		pluginApp = this.app;
 	}

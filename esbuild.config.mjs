@@ -1,6 +1,6 @@
 import esbuild from "esbuild";
 import process from "process";
-import builtins from "builtin-modules";
+import { builtinModules } from "node:module";
 
 const prod = process.argv[2] === "production";
 
@@ -19,7 +19,7 @@ esbuild
 			"@codemirror/search",
 			"@codemirror/state",
 			"@codemirror/view",
-			...builtins,
+			...builtinModules,
 		],
 		format: "cjs",
 		target: "es2018",
